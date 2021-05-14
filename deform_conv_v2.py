@@ -30,41 +30,43 @@ class DeformConv2d(nn.Module):
         grad_input = (grad_input[i] * 0.1 for i in range(len(grad_input)))
         grad_output = (grad_output[i] * 0.1 for i in range(len(grad_output)))
 
-    def forward(self, x):
-        offset = self.p_conv(x)
+    def forward(self, x):            #[32,64,28,28] 输入
+        offset = self.p_conv(x)      #[32,18,28,28]
         if self.modulation:
-            m = torch.sigmoid(self.m_conv(x))
+            m = torch.sigmoid(self.m_conv(x))  #[32,9,28,28] 卷积核权重
 
         dtype = offset.data.type()
-        ks = self.kernel_size
-        N = offset.size(1) // 2
+        ks = self.kernel_size                  # 3
+        N = offset.size(1) // 2                # 9
 
         if self.padding:
-            x = self.zero_padding(x)
+            x = self.zero_padding(x)  #[32,64,28,28] ——> #[32,64,30,30]
 
         # (b, 2N, h, w)
-        p = self._get_p(offset, dtype)
+        p = self._get_p(offset, dtype)    #[32,18,28,28]
 
         # (b, h, w, 2N)
-        p = p.contiguous().permute(0, 2, 3, 1)
-        q_lt = p.detach().floor()
-        q_rb = q_lt + 1
+        p = p.contiguous().permute(0, 2, 3, 1) ##[32,18,28,28] ——> [32,28,28,18]
+        q_lt = p.detach().floor()              #[32,28,28,18]
+        q_rb = q_lt + 1                        #[32,28,28,18]
 
-        q_lt = torch.cat([torch.clamp(q_lt[..., :N], 0, x.size(2)-1), torch.clamp(q_lt[..., N:], 0, x.size(3)-1)], dim=-1).long()
-        q_rb = torch.cat([torch.clamp(q_rb[..., :N], 0, x.size(2)-1), torch.clamp(q_rb[..., N:], 0, x.size(3)-1)], dim=-1).long()
-        q_lb = torch.cat([q_lt[..., :N], q_rb[..., N:]], dim=-1)
-        q_rt = torch.cat([q_rb[..., :N], q_lt[..., N:]], dim=-1)
+        q_lt = torch.cat([torch.clamp(q_lt[..., :N], 0, x.size(2)-1), torch.clamp(q_lt[..., N:], 0, x.size(3)-1)], dim=-1).long()#[32,28,28,18]
+        q_rb = torch.cat([torch.clamp(q_rb[..., :N], 0, x.size(2)-1), torch.clamp(q_rb[..., N:], 0, x.size(3)-1)], dim=-1).long()#[32,28,28,18]
+        q_lb = torch.cat([q_lt[..., :N], q_rb[..., N:]], dim=-1)#[32,28,28,18]
+        q_rt = torch.cat([q_rb[..., :N], q_lt[..., N:]], dim=-1)#[32,28,28,18]
 
         # clip p
-        p = torch.cat([torch.clamp(p[..., :N], 0, x.size(2)-1), torch.clamp(p[..., N:], 0, x.size(3)-1)], dim=-1)
+        p = torch.cat([torch.clamp(p[..., :N], 0, x.size(2)-1), torch.clamp(p[..., N:], 0, x.size(3)-1)], dim=-1) #[32,28,28,18]
 
         # bilinear kernel (b, h, w, N)
+        #[32,28,28,9]
         g_lt = (1 + (q_lt[..., :N].type_as(p) - p[..., :N])) * (1 + (q_lt[..., N:].type_as(p) - p[..., N:]))
         g_rb = (1 - (q_rb[..., :N].type_as(p) - p[..., :N])) * (1 - (q_rb[..., N:].type_as(p) - p[..., N:]))
         g_lb = (1 + (q_lb[..., :N].type_as(p) - p[..., :N])) * (1 - (q_lb[..., N:].type_as(p) - p[..., N:]))
         g_rt = (1 - (q_rt[..., :N].type_as(p) - p[..., :N])) * (1 + (q_rt[..., N:].type_as(p) - p[..., N:]))
 
         # (b, c, h, w, N)
+        ##[32,64,28,28,18]
         x_q_lt = self._get_x_q(x, q_lt, N)
         x_q_rb = self._get_x_q(x, q_rb, N)
         x_q_lb = self._get_x_q(x, q_lb, N)
@@ -88,7 +90,8 @@ class DeformConv2d(nn.Module):
 
         return out
 
-    def _get_p_n(self, N, dtype):
+    # 卷积的相对坐标
+    def _get_p_n(self, N, dtype): 
         p_n_x, p_n_y = torch.meshgrid(
             torch.arange(-(self.kernel_size-1)//2, (self.kernel_size-1)//2+1),
             torch.arange(-(self.kernel_size-1)//2, (self.kernel_size-1)//2+1))
@@ -98,7 +101,8 @@ class DeformConv2d(nn.Module):
 
         return p_n
 
-    def _get_p_0(self, h, w, N, dtype):
+    #计算中心坐标
+    def _get_p_0(self, h, w, N, dtype):   
         p_0_x, p_0_y = torch.meshgrid(
             torch.arange(1, h*self.stride+1, self.stride),
             torch.arange(1, w*self.stride+1, self.stride))
@@ -108,7 +112,7 @@ class DeformConv2d(nn.Module):
 
         return p_0
 
-    def _get_p(self, offset, dtype):
+    def _get_p(self, offset, dtype):  
         N, h, w = offset.size(1)//2, offset.size(2), offset.size(3)
 
         # (1, 2N, 1, 1)
